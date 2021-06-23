@@ -9,7 +9,7 @@ from blspy import G1Element
 import chia.server.ws_connection as ws  # lgtm [py/import-and-import-from]
 from chia.consensus.coinbase import create_puzzlehash_for_pk
 from chia.consensus.constants import ConsensusConstants
-from chia.daemon.keychain_proxy import uses_keychain_proxy
+from chia.daemon.keychain_proxy import connect_to_keychain_and_validate
 from chia.protocols import farmer_protocol, harvester_protocol
 from chia.protocols.protocol_message_types import ProtocolMessageTypes
 from chia.server.outbound_message import NodeType, make_msg
@@ -19,7 +19,9 @@ from chia.types.blockchain_format.sized_bytes import bytes32
 from chia.util.bech32m import decode_puzzle_hash
 from chia.util.config import load_config, save_config
 from chia.util.ints import uint32, uint64
+from chia.util.keychain import Keychain
 from chia.wallet.derive_keys import master_sk_to_farmer_sk, master_sk_to_pool_sk, master_sk_to_wallet_sk
+from functools import wraps
 
 log = logging.getLogger(__name__)
 
@@ -29,6 +31,25 @@ HARVESTER PROTOCOL (FARMER <-> HARVESTER)
 """
 
 
+def uses_keychain_proxy():
+    """
+    Decorator which establishes a KeychainProxy connection if necessary
+    """
+
+    def wrapper(method):
+        @wraps(method)
+        async def inner(self, *args, **kwargs):
+            if not self.keychain_proxy:
+                self.keychain_proxy = await connect_to_keychain_and_validate(
+                    self.root_path, self.log, self.local_keychain
+                )
+            return await method(self, *args, **kwargs)
+
+        return inner
+
+    return wrapper
+
+
 class Farmer:
     def __init__(
         self,
@@ -36,8 +57,10 @@ class Farmer:
         farmer_config: Dict,
         pool_config: Dict,
         consensus_constants: ConsensusConstants,
+        local_keychain: Optional[Keychain] = None,
     ):
         self.keychain_proxy = None
+        self.local_keychain = local_keychain
         self.root_path = root_path
         self.config = farmer_config
         self.pool_config = pool_config
@@ -138,6 +161,7 @@ class Farmer:
     @uses_keychain_proxy()
     def get_reward_targets(self, search_for_private_key: bool) -> Dict:
         if search_for_private_key:
+            assert self.keychain_proxy is not None  # An offering to the mypy gods
             all_sks = asyncio.run(self.keychain_proxy.get_all_private_keys())
             stop_searching_for_farmer, stop_searching_for_pool = False, False
             for i in range(500):
