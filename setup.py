@@ -60,7 +60,6 @@ kwargs = dict(
         "build_scripts",
         "chia",
         "chia.cmds",
-        "chia.clvm",
         "chia.consensus",
         "chia.daemon",
         "chia.full_node",
